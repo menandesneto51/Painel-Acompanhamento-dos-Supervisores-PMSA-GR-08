@@ -1,0 +1,1115 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard Executivo (v11.2 - Busca Inteligente + Cache Local)</title>
+
+  <!-- Bibliotecas CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.js"></script>
+
+  <style>
+    :root {
+      --primary-color: #667eea;
+      --primary-dark: #5a68d0;
+      --export-color: #15803d;
+      --export-dark: #166534;
+      --bg-light: #f5f5f5;
+      --bg-card: #ffffff;
+      --text-dark: #333;
+      --text-light: #777;
+      --status-excellent-bg: #f0fdf4;
+      --status-excellent-text: #15803d;
+      --status-good-bg: #fefce8;
+      --status-good-text: #a16207;
+      --status-critical-bg: #fef2f2;
+      --status-critical-text: #b91c1c;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: var(--bg-light);
+      padding: 20px;
+      color: var(--text-dark);
+    }
+
+    .container {
+      max-width: 1900px;
+      margin: 0 auto;
+      background: var(--bg-card);
+      border-radius: 12px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+      overflow: hidden;
+    }
+
+    .header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #fff;
+      padding: 24px 30px;
+    }
+
+    .header h1 { font-size: 26px; margin-bottom: 6px; }
+    .header p { font-size: 14px; opacity: 0.9; }
+
+    .content { padding: 20px 24px 28px; }
+
+    .advanced-filters {
+      background: #fff;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 20px;
+      border: 1px solid #e5e7eb;
+    }
+
+    .filters-title {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      color: var(--text-dark);
+    }
+
+    .filters-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      align-items: end;
+    }
+
+    .filter-group { display: flex; flex-direction: column; gap: 6px; }
+    .filter-group label { font-size: 12px; font-weight: 600; color: var(--text-light); }
+
+    select, input[type="file"], input[type="search"] {
+      padding: 8px 12px; font-size: 13px; border-radius: 6px; border: 1px solid #d1d5db; background: #fff;
+    }
+
+    button {
+      padding: 8px 16px; border-radius: 6px; border: none; font-size: 13px; cursor: pointer;
+      background: var(--primary-color); color: #fff; font-weight: 600;
+    }
+    .export-btn { background: var(--export-color); }
+    .export-btn:hover:not(:disabled) { background: var(--export-dark); }
+
+    button:disabled, select:disabled, input:disabled {
+      background-color: #e5e7eb; cursor: not-allowed; opacity: 0.6;
+    }
+
+    .kpi-section { margin-bottom: 24px; }
+    .kpi-section-title {
+      font-size: 16px; font-weight: 700; color: var(--text-dark);
+      margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px solid var(--primary-color);
+    }
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+    }
+    .kpi-card {
+      background: var(--bg-card); border-radius: 10px; padding: 16px;
+      border: 1px solid #e5e7eb; display: flex; flex-direction: column;
+    }
+    .kpi-label { font-size: 13px; color: var(--text-light); font-weight: 600; }
+    .kpi-value { font-size: 28px; font-weight: 700; color: var(--text-dark); margin-bottom: 4px; }
+    .kpi-extra { font-size: 12px; color: #999; margin-top: auto; }
+
+    .performance-tables-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 24px;
+      margin-bottom: 24px;
+    }
+    .performance-table-card {
+      background: #fff; border: 1px solid #e5e7eb;
+      border-radius: 12px; padding: 16px 20px;
+    }
+    .performance-table-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .performance-table-title {
+      font-size: 14px; font-weight: 600; color: #333;
+    }
+    .search-bar-container { margin-bottom: 12px; }
+    .search-bar-container input { width: 100%; }
+    .performance-table-container {
+      max-height: 400px; overflow-y: auto;
+      border: 1px solid #e5e7eb; border-radius: 8px;
+    }
+    .performance-table { width: 100%; border-collapse: collapse; }
+    .performance-table thead { position: sticky; top: 0; background: #f9fafb; z-index: 1; }
+    .performance-table th {
+      padding: 10px 12px; text-align: left; font-size: 11px;
+      font-weight: 600; color: #6b7280; text-transform: uppercase;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .performance-table td {
+      padding: 8px 12px; font-size: 13px; border-bottom: 1px solid #f3f4f6;
+    }
+
+    #supervisorTableContainer .performance-table tr { cursor: pointer; transition: background-color 0.2s; }
+    #supervisorTableContainer .performance-table tr:hover { background-color: #f3f4f6; }
+    #supervisorTableContainer .performance-table tr.selected-row {
+      background-color: var(--primary-color) !important; color: #fff;
+    }
+    #supervisorTableContainer .performance-table tr.selected-row .td-rank,
+    #supervisorTableContainer .performance-table tr.selected-row .td-name,
+    #supervisorTableContainer .performance-table tr.selected-row .td-perc {
+      color: #fff; font-weight: 700;
+    }
+
+    .performance-table-card .excellent { background-color: var(--status-excellent-bg); }
+    .performance-table-card .good { background-color: var(--status-good-bg); }
+    .performance-table-card .critical { background-color: var(--status-critical-bg); }
+
+    .performance-bar-container {
+      width: 100%; background-color: #e5e7eb; border-radius: 4px;
+      height: 8px;
+    }
+    .performance-bar { height: 100%; }
+
+    .excellent .performance-bar { background-color: var(--status-excellent-text); }
+    .good .performance-bar { background-color: var(--status-good-text); }
+    .critical .performance-bar { background-color: var(--status-critical-text); }
+
+    .td-rank { font-weight: 600; color: var(--text-light); }
+    .td-name { font-weight: 500; }
+    .td-perc {
+      font-weight: 700;
+      font-size: 12px;
+      width: 60px;
+      text-align: right;
+    }
+    .td-perc.excellent { color: var(--status-excellent-text); }
+    .td-perc.good { color: var(--status-good-text); }
+    .td-perc.critical { color: var(--status-critical-text); }
+
+    .summary-tables-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 24px; margin-bottom: 24px;
+    }
+    .summary-table-card {
+      background: #fff; border-radius: 12px;
+      padding: 16px 20px; border: 1px solid #e5e7eb;
+    }
+    .summary-table-title {
+      font-size: 14px; font-weight: 600; color: #333; margin-bottom: 12px;
+    }
+
+    @media (max-width: 1200px) {
+      .performance-tables-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 900px) {
+      .summary-tables-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 600px) {
+      .header { flex-direction: column; align-items: flex-start; }
+      .filters-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1>Programa Mais Saúde Com Agente – Monitoramento de Lançamento de Notas CR8</h1>
+      <p>Versão com busca em tempo real e cache local do último arquivo carregado.</p>
+    </header>
+
+    <main class="content">
+      <section class="advanced-filters">
+        <div class="filters-title">🔍 Filtros e Controles</div>
+        <div class="filters-grid">
+          <div class="filter-group">
+            <label for="csvFileInput">Carregar Arquivo CSV</label>
+            <input type="file" id="csvFileInput" accept=".csv" />
+          </div>
+          <div class="filter-group">
+            <label for="filtroTurma">Tipo de Turma</label>
+            <select id="filtroTurma" disabled><option value="">Todas</option></select>
+          </div>
+          <div class="filter-group">
+            <label for="filtroDisciplina">Disciplina</label>
+            <select id="filtroDisciplina" disabled><option value="">Todas</option></select>
+          </div>
+          <div class="filter-group">
+            <label for="filtroSupervisor">Supervisor</label>
+            <select id="filtroSupervisor" disabled><option value="">Todos</option></select>
+          </div>
+          <div class="filter-group">
+            <label for="filtroPreceptor">Preceptor</label>
+            <select id="filtroPreceptor" disabled><option value="">Todos</option></select>
+          </div>
+          <div class="filter-group">
+            <label for="filtroRegiao">Região</label>
+            <select id="filtroRegiao" disabled><option value="">Todas</option></select>
+          </div>
+          <div class="filter-group">
+            <label for="filtroPerformance">Filtrar por Performance</label>
+            <select id="filtroPerformance" disabled>
+              <option value="">Todas</option>
+              <option value="critical">Críticos (&lt; 80%)</option>
+              <option value="good">Bons (80–99%)</option>
+              <option value="excellent">Completos (100%)</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label>&nbsp;</label>
+            <button id="btnLimparFiltros" disabled>Limpar Filtros</button>
+          </div>
+          <div class="filter-group">
+            <label>&nbsp;</label>
+            <button id="btnLimparCache" disabled>Limpar Cache</button>
+          </div>
+          <div class="filter-group">
+            <label>Exportar Dados</label>
+            <button id="btnExportSupervisoresCSV" class="export-btn" disabled>Supervisores (CSV)</button>
+          </div>
+          <div class="filter-group">
+            <label>&nbsp;</label>
+            <button id="btnExportPreceptoresCSV" class="export-btn" disabled>Preceptores (CSV)</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="kpi-section">
+        <h3 class="kpi-section-title">Visão Geral</h3>
+        <div class="kpis">
+          <div class="kpi-card">
+            <div class="kpi-label">Performance Geral</div>
+            <div class="kpi-value" id="kpiPercentualGeral">0%</div>
+            <div class="kpi-extra" id="kpiAlunos">0 registros</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Registros Pendentes</div>
+            <div class="kpi-value" id="kpiPendentes">0</div>
+            <div class="kpi-extra" id="kpiPendentesPercent">0% do total</div>
+          </div>
+        </div>
+      </section>
+
+      <div class="performance-tables-grid">
+        <div class="performance-table-card">
+          <h4 class="performance-table-title">Performance por Supervisor</h4>
+          <div class="search-bar-container">
+            <input type="search" id="searchSupervisor" placeholder="Buscar supervisor..." disabled>
+          </div>
+          <div id="supervisorTableContainer" class="performance-table-container"></div>
+        </div>
+        <div class="performance-table-card">
+          <div class="performance-table-header">
+            <h4 class="performance-table-title" id="preceptorTableTitle">Preceptores</h4>
+          </div>
+          <div class="search-bar-container">
+            <input type="search" id="searchPreceptor" placeholder="Buscar preceptor..." disabled>
+          </div>
+          <div id="preceptorTableContainer" class="performance-table-container">
+            <p style="text-align:center; color:#999; padding: 20px;">Selecione um supervisor para ver seus preceptores.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="summary-tables-grid">
+        <div class="summary-table-card">
+          <h4 class="summary-table-title">Resumo Geral</h4>
+          <div id="resumoGeralTableContainer"></div>
+        </div>
+        <div class="summary-table-card">
+          <h4 class="summary-table-title">Comparação ACE vs ACS</h4>
+          <div id="aceAcsTableContainer"></div>
+        </div>
+        <div class="summary-table-card">
+          <h4 class="summary-table-title">Performance Média: Supervisores vs Preceptores</h4>
+          <div id="compGeralChartContainer" style="height: 150px;">
+            <canvas id="compGeralChart"></canvas>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  const VALOR_PENDENTE = 'sem nota';
+  const LOCAL_STORAGE_KEY = 'dashboard_cr8_last_csv_v11_2';
+
+  let dados = [];
+  let debounceTimer;
+  let supervisorData = [];
+  let preceptorData = [];
+  let selectedSupervisor = null;
+  let charts = { compGeral: null };
+  let currentAggregatedData = {
+    total: 0,
+    lancados: 0,
+    porSupervisor: {},
+    porPreceptor: {},
+    porTurmaTipo: {},
+    porRegiao: {},
+    preceptorSupervisorLink: {}
+  };
+
+  class IntelligentCache {
+    constructor(maxSize = 50) {
+      this.cache = new Map();
+      this.maxSize = maxSize;
+    }
+    generateKey(filters = {}) {
+      const sortedKeys = Object.keys(filters).sort();
+      return sortedKeys.map(key => `${key}:${filters[key]}`).join('|');
+    }
+    get(key) {
+      return this.cache.has(key) ? this.cache.get(key) : null;
+    }
+    set(key, value) {
+      if (this.cache.size >= this.maxSize) {
+        const firstKey = this.cache.keys().next().value;
+        this.cache.delete(firstKey);
+      }
+      this.cache.set(key, value);
+    }
+    clear() {
+      this.cache.clear();
+    }
+  }
+
+  const cache = new IntelligentCache(100);
+
+  const selectors = {
+    csvInput: document.getElementById('csvFileInput'),
+    turma: document.getElementById('filtroTurma'),
+    disciplina: document.getElementById('filtroDisciplina'),
+    supervisor: document.getElementById('filtroSupervisor'),
+    preceptor: document.getElementById('filtroPreceptor'),
+    regiao: document.getElementById('filtroRegiao'),
+    performance: document.getElementById('filtroPerformance'),
+    searchSupervisor: document.getElementById('searchSupervisor'),
+    searchPreceptor: document.getElementById('searchPreceptor'),
+    btnLimpar: document.getElementById('btnLimparFiltros'),
+    btnLimparCache: document.getElementById('btnLimparCache'),
+    btnExportSupervisores: document.getElementById('btnExportSupervisoresCSV'),
+    btnExportPreceptores: document.getElementById('btnExportPreceptoresCSV')
+  };
+
+  const ui = {
+    kpiPercentualGeral: document.getElementById('kpiPercentualGeral'),
+    kpiAlunos: document.getElementById('kpiAlunos'),
+    kpiPendentes: document.getElementById('kpiPendentes'),
+    kpiPendentesPercent: document.getElementById('kpiPendentesPercent'),
+    supervisorTableContainer: document.getElementById('supervisorTableContainer'),
+    preceptorTableContainer: document.getElementById('preceptorTableContainer'),
+    preceptorTableTitle: document.getElementById('preceptorTableTitle'),
+    resumoGeralTableContainer: document.getElementById('resumoGeralTableContainer'),
+    aceAcsTableContainer: document.getElementById('aceAcsTableContainer'),
+    compGeralChart: document.getElementById('compGeralChart')
+  };
+
+  function debounce(fn, delay) {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(fn, delay);
+  }
+
+  function setFiltrosHabilitados(enabled) {
+    const toToggle = [
+      selectors.turma,
+      selectors.disciplina,
+      selectors.supervisor,
+      selectors.preceptor,
+      selectors.regiao,
+      selectors.performance,
+      selectors.searchSupervisor,
+      selectors.searchPreceptor,
+      selectors.btnLimpar,
+      selectors.btnLimparCache,
+      selectors.btnExportSupervisores,
+      selectors.btnExportPreceptores
+    ];
+    toToggle.forEach(el => { if (el) el.disabled = !enabled; });
+    selectors.csvInput.disabled = false; // sempre pode trocar de arquivo
+  }
+
+  function ehLancado(rec) {
+    const v = String(rec.nota ?? '').trim().toLowerCase();
+    return v && v !== VALOR_PENDENTE && v !== '0' && v !== '0.000';
+  }
+
+  function transformarDados(rows) {
+    const headerRow = (rows[0] || []).map(h => String(h || '').trim().toLowerCase().replace(/"/g, ''));
+
+    // Estrutura conhecida: Supervisor, Preceptor, Turma, Aluno, UF, 15..28
+    const columnMap = { supervisor: 0, preceptor: 1, turma: 2, aluno: 3, uf: 4 };
+
+    if (headerRow.length < 5 || !headerRow[0].includes('supervisor')) {
+      console.warn('Cabeçalho inesperado:', headerRow);
+    }
+
+    const disciplineMap = {};
+    for (let d = 15; d <= 28; d++) {
+      const dStr = String(d);
+      const idxs = headerRow
+        .map((h, i) => (h === dStr ? i : -1))
+        .filter(i => i !== -1);
+      disciplineMap[dStr] = idxs;
+    }
+
+    const dadosLongos = [];
+    const dataRows = rows.slice(1);
+
+    for (let i = 0; i < dataRows.length; i++) {
+      try {
+        const row = dataRows[i].map(d => String(d || '').trim());
+        if (row.length < 5) continue;
+
+        const turmaOriginal = (row[columnMap.turma] || '').trim();
+        if (!turmaOriginal) continue;
+
+        const nomeAluno = (row[columnMap.aluno] || '').trim();
+        if (!nomeAluno) continue;
+
+        const supervisor = (row[columnMap.supervisor] || 'N/A').trim();
+        const preceptor = (row[columnMap.preceptor] || 'N/A').trim();
+        const uf = (row[columnMap.uf] || 'N/A').trim();
+        const turmaTipo = turmaOriginal.toUpperCase().includes('ACE') ? 'ACE' : 'ACS';
+
+        let regiao = 'MT (Outros)';
+        if (uf.toUpperCase() === 'RO') regiao = 'Rondônia';
+        else if (uf.toUpperCase() === 'PR') regiao = 'Paraná';
+
+        const base = { supervisor, preceptor, turma: turmaOriginal, turmaTipo, aluno: nomeAluno, regiao };
+
+        for (let d = 15; d <= 28; d++) {
+          const idxs = disciplineMap[String(d)];
+          if (!idxs || idxs.length === 0) continue;
+
+          let colIndex = -1;
+          if (d <= 23) {
+            colIndex = idxs[0];
+          } else {
+            if (idxs.length === 1) colIndex = idxs[0];
+            else if (idxs.length > 1) colIndex = turmaTipo === 'ACE' ? idxs[1] : idxs[0];
+          }
+
+          if (colIndex !== -1 && colIndex < row.length) {
+            let nota = (row[colIndex] ? row[colIndex].trim() : '') || VALOR_PENDENTE;
+            dadosLongos.push({ ...base, disciplina: `D${d}`, nota });
+          }
+        }
+      } catch (e) {
+        console.warn(`Erro ao processar linha ${i}:`, e);
+      }
+    }
+
+    return dadosLongos;
+  }
+
+  function generateFilterKey() {
+    const filters = {
+      turma: selectors.turma.value || '',
+      disciplina: selectors.disciplina.value || '',
+      supervisor: selectors.supervisor.value || '',
+      preceptor: selectors.preceptor.value || '',
+      regiao: selectors.regiao.value || '',
+      performance: selectors.performance.value || ''
+    };
+    return cache.generateKey(filters);
+  }
+
+  function filtrarDados() {
+    const key = `filter_${generateFilterKey()}`;
+    const cached = cache.get(key);
+    if (cached) return cached;
+
+    const f = {
+      turma: selectors.turma.value,
+      disciplina: selectors.disciplina.value,
+      supervisor: selectors.supervisor.value,
+      preceptor: selectors.preceptor.value,
+      regiao: selectors.regiao.value
+    };
+
+    let result = dados;
+    if (f.turma) result = result.filter(d => d.turmaTipo === f.turma);
+    if (f.disciplina) result = result.filter(d => d.disciplina === f.disciplina);
+    if (f.supervisor) result = result.filter(d => d.supervisor === f.supervisor);
+    if (f.preceptor) result = result.filter(d => d.preceptor === f.preceptor);
+    if (f.regiao) result = result.filter(d => d.regiao === f.regiao);
+
+    cache.set(key, result);
+    return result;
+  }
+
+  function calcularAgregados(registros) {
+    const key = `agg_${generateFilterKey()}_${registros.length}`;
+    const cached = cache.get(key);
+    if (cached) return cached;
+
+    const ag = {
+      total: registros.length,
+      lancados: 0,
+      porSupervisor: {},
+      porPreceptor: {},
+      porTurmaTipo: {},
+      porRegiao: {},
+      preceptorSupervisorLink: {}
+    };
+
+    registros.forEach(r => {
+      const lanc = ehLancado(r);
+      if (lanc) ag.lancados++;
+
+      const supervisor = r.supervisor || 'N/A';
+      const preceptor = r.preceptor || 'N/A';
+      const turmaTipo = r.turmaTipo || 'N/A';
+      const regiao = r.regiao || 'N/A';
+
+      ['supervisor', 'preceptor', 'turmaTipo', 'regiao'].forEach(key => {
+        const nome = r[key] || 'N/A';
+        const mapKey = `por${key.charAt(0).toUpperCase() + key.slice(1)}`;
+        if (!ag[mapKey][nome]) ag[mapKey][nome] = { total: 0, lancados: 0 };
+        ag[mapKey][nome].total++;
+        if (lanc) ag[mapKey][nome].lancados++;
+      });
+
+      if (preceptor !== 'N/A' && supervisor !== 'N/A') {
+        if (!ag.preceptorSupervisorLink[preceptor]) ag.preceptorSupervisorLink[preceptor] = {};
+        if (!ag.preceptorSupervisorLink[preceptor][supervisor]) ag.preceptorSupervisorLink[preceptor][supervisor] = 0;
+        ag.preceptorSupervisorLink[preceptor][supervisor]++;
+      }
+    });
+
+    Object.keys(ag.preceptorSupervisorLink).forEach(preceptor => {
+      const supervisors = ag.preceptorSupervisorLink[preceptor];
+      const primarySupervisor = Object.keys(supervisors).reduce((a, b) =>
+        supervisors[a] > supervisors[b] ? a : b
+      );
+      ag.preceptorSupervisorLink[preceptor] = primarySupervisor;
+    });
+
+    cache.set(key, ag);
+    return ag;
+  }
+
+  function criarOuAtualizarChart(instance, ctx, type, data, options) {
+    if (instance) {
+      instance.data = data;
+      instance.options = options;
+      instance.update();
+      return instance;
+    }
+    return new Chart(ctx, { type, data, options });
+  }
+
+  function updateAllUI() {
+    const total = currentAggregatedData.total;
+    const lancados = currentAggregatedData.lancados;
+
+    const percLancados = total > 0 ? (lancados / total) * 100 : 0;
+    const pendentes = total - lancados;
+    const percPendentes = total > 0 ? (pendentes / total) * 100 : 0;
+
+    ui.kpiPercentualGeral.textContent = `${percLancados.toFixed(1)}%`;
+    ui.kpiAlunos.textContent = `${total.toLocaleString('pt-BR')} registros`;
+    ui.kpiPendentes.textContent = pendentes.toLocaleString('pt-BR');
+    ui.kpiPendentesPercent.textContent = `${percPendentes.toFixed(1)}% do total`;
+
+    prepareAndRenderTables(currentAggregatedData);
+    updateSummaryTables(currentAggregatedData);
+  }
+
+  function prepareAndRenderTables(ag) {
+    supervisorData = Object.entries(ag.porSupervisor)
+      .filter(([name]) => name !== 'N/A')
+      .map(([name, { total, lancados }]) => ({
+        name,
+        total,
+        lancados,
+        perc: total > 0 ? (lancados / total) * 100 : 0
+      }))
+      .sort((a, b) => b.perc - a.perc);
+
+    preceptorData = Object.entries(ag.porPreceptor)
+      .filter(([name]) => name !== 'N/A')
+      .map(([name, { total, lancados }]) => ({
+        name,
+        total,
+        lancados,
+        perc: total > 0 ? (lancados / total) * 100 : 0,
+        supervisor: ag.preceptorSupervisorLink[name] || 'N/A'
+      }))
+      .sort((a, b) => b.perc - a.perc);
+
+    renderSupervisorTable();
+
+    if (selectedSupervisor) {
+      renderPreceptorTable();
+    } else {
+      ui.preceptorTableContainer.innerHTML = '<p style="text-align:center; color:#999; padding: 20px;">Selecione um supervisor para ver seus preceptores.</p>';
+      ui.preceptorTableTitle.textContent = 'Preceptores';
+    }
+  }
+
+  function renderSupervisorTable() {
+    const performanceFilter = selectors.performance.value;
+    let dataToRender = supervisorData.slice();
+
+    if (performanceFilter) {
+      dataToRender = dataToRender.filter(d => {
+        if (performanceFilter === 'critical') return d.perc < 80;
+        if (performanceFilter === 'good') return d.perc >= 80 && d.perc < 100;
+        if (performanceFilter === 'excellent') return d.perc === 100;
+        return true;
+      });
+    }
+
+    const searchTerm = selectors.searchSupervisor.value.toLowerCase().trim();
+    if (searchTerm) {
+      dataToRender = dataToRender.filter(d => d.name.toLowerCase().includes(searchTerm));
+    }
+
+    ui.supervisorTableContainer.innerHTML = generatePerformanceTableHTML(dataToRender, 'supervisor');
+
+    ui.supervisorTableContainer.querySelectorAll('tr[data-supervisor-name]').forEach(tr => {
+      tr.addEventListener('click', handleSupervisorSelection);
+      if (tr.dataset.supervisorName === selectedSupervisor) {
+        tr.classList.add('selected-row');
+      }
+    });
+  }
+
+  function renderPreceptorTable() {
+    if (!selectedSupervisor) return;
+
+    const performanceFilter = selectors.performance.value;
+    let filteredPreceptors = preceptorData.filter(p => p.supervisor === selectedSupervisor);
+
+    if (performanceFilter) {
+      filteredPreceptors = filteredPreceptors.filter(d => {
+        if (performanceFilter === 'critical') return d.perc < 80;
+        if (performanceFilter === 'good') return d.perc >= 80 && d.perc < 100;
+        if (performanceFilter === 'excellent') return d.perc === 100;
+        return true;
+      });
+    }
+
+    const searchTerm = selectors.searchPreceptor.value.toLowerCase().trim();
+    if (searchTerm) {
+      filteredPreceptors = filteredPreceptors.filter(d => d.name.toLowerCase().includes(searchTerm));
+    }
+
+    ui.preceptorTableContainer.innerHTML = generatePerformanceTableHTML(filteredPreceptors, 'preceptor');
+    ui.preceptorTableTitle.textContent = `Preceptores de ${selectedSupervisor}`;
+  }
+
+  function handleSupervisorSelection(e) {
+    const row = e.target.closest('tr');
+    if (!row) return;
+    const supervisorName = row.dataset.supervisorName;
+
+    if (selectedSupervisor === supervisorName) {
+      selectedSupervisor = null;
+      row.classList.remove('selected-row');
+      ui.preceptorTableContainer.innerHTML = '<p style="text-align:center; color:#999; padding: 20px;">Selecione um supervisor para ver seus preceptores.</p>';
+      ui.preceptorTableTitle.textContent = 'Preceptores';
+    } else {
+      selectedSupervisor = supervisorName;
+      ui.supervisorTableContainer.querySelectorAll('tr').forEach(tr => tr.classList.remove('selected-row'));
+      row.classList.add('selected-row');
+      renderPreceptorTable();
+    }
+  }
+
+  function generatePerformanceTableHTML(data, type) {
+    if (!data || data.length === 0) {
+      return `<p style="text-align:center; color:#999; padding: 20px;">Nenhum ${type} para exibir com os filtros atuais.</p>`;
+    }
+
+    const headers = [
+      { key: 'rank', label: '#' },
+      { key: 'name', label: 'Nome' },
+      { key: 'lancados', label: 'Lançamentos' },
+      { key: 'perc', label: '%' },
+      { key: 'perc_bar', label: 'Performance' }
+    ];
+
+    let headerHTML = '<thead><tr>';
+    headers.forEach(h => {
+      headerHTML += `<th>${h.label}</th>`;
+    });
+    headerHTML += '</tr></thead>';
+
+    let bodyHTML = '<tbody>';
+    data.forEach((item, index) => {
+      const perc = item.perc;
+      let statusClass = 'critical';
+      if (perc === 100) statusClass = 'excellent';
+      else if (perc >= 80) statusClass = 'good';
+
+      const supervisorAttr = type === 'supervisor' ? `data-supervisor-name="${item.name}"` : '';
+
+      bodyHTML += `
+        <tr class="${statusClass}" ${supervisorAttr}>
+          <td class="td-rank">${index + 1}</td>
+          <td class="td-name">${item.name}</td>
+          <td>${item.lancados}/${item.total}</td>
+          <td class="td-perc ${statusClass}">${perc.toFixed(1)}%</td>
+          <td>
+            <div class="performance-bar-container">
+              <div class="performance-bar" style="width: ${Math.min(perc, 100)}%;"></div>
+            </div>
+          </td>
+        </tr>`;
+    });
+    bodyHTML += '</tbody>';
+
+    return `<table class="performance-table">${headerHTML}${bodyHTML}</table>`;
+  }
+
+  function updateSummaryTables(ag) {
+    const lancados = ag.lancados;
+    const pendentes = ag.total - lancados;
+    const total = ag.total;
+    const percLancados = total > 0 ? (lancados / total) * 100 : 0;
+    const percPendentes = total > 0 ? (pendentes / total) * 100 : 0;
+
+    let resumoHTML = '<table class="performance-table"><tbody>';
+    resumoHTML += `
+      <tr class="excellent">
+        <td class="td-name">Lançados</td>
+        <td>${lancados.toLocaleString('pt-BR')}</td>
+        <td class="td-perc excellent">${percLancados.toFixed(1)}%</td>
+        <td>
+          <div class="performance-bar-container">
+            <div class="performance-bar" style="width: ${Math.min(percLancados, 100)}%;"></div>
+          </div>
+        </td>
+      </tr>
+      <tr class="critical">
+        <td class="td-name">Pendentes</td>
+        <td>${pendentes.toLocaleString('pt-BR')}</td>
+        <td class="td-perc critical">${percPendentes.toFixed(1)}%</td>
+        <td>
+          <div class="performance-bar-container">
+            <div class="performance-bar" style="width: ${Math.min(percPendentes, 100)}%;"></div>
+          </div>
+        </td>
+      </tr>`;
+    resumoHTML += '</tbody></table>';
+    ui.resumoGeralTableContainer.innerHTML = resumoHTML;
+
+    const turmaData = Object.entries(ag.porTurmaTipo)
+      .filter(([name]) => name !== 'N/A')
+      .map(([name, { total, lancados }]) => ({
+        name,
+        total,
+        lancados,
+        perc: total > 0 ? (lancados / total) * 100 : 0
+      }))
+      .sort((a, b) => b.perc - a.perc);
+
+    let aceAcsHTML = '<table class="performance-table"><tbody>';
+    if (turmaData.length > 0) {
+      turmaData.forEach(item => {
+        const perc = item.perc;
+        let statusClass = 'critical';
+        if (perc === 100) statusClass = 'excellent';
+        else if (perc >= 80) statusClass = 'good';
+        aceAcsHTML += `
+          <tr class="${statusClass}">
+            <td class="td-name">${item.name}</td>
+            <td>${item.lancados}/${item.total}</td>
+            <td class="td-perc ${statusClass}">${perc.toFixed(1)}%</td>
+            <td>
+              <div class="performance-bar-container">
+                <div class="performance-bar" style="width: ${Math.min(perc, 100)}%;"></div>
+              </div>
+            </td>
+          </tr>`;
+      });
+    } else {
+      aceAcsHTML += '<tr><td colspan="4" style="text-align:center; color:#999;">Nenhum dado de turma para exibir.</td></tr>';
+    }
+    aceAcsHTML += '</tbody></table>';
+    ui.aceAcsTableContainer.innerHTML = aceAcsHTML;
+
+    const ctx = ui.compGeralChart.getContext('2d');
+    const supTotal = supervisorData.reduce((acc, cur) => acc + cur.total, 0);
+    const supLancados = supervisorData.reduce((acc, cur) => acc + cur.lancados, 0);
+    const supPerc = supTotal > 0 ? (supLancados / supTotal) * 100 : 0;
+
+    const precTotal = preceptorData.reduce((acc, cur) => acc + cur.total, 0);
+    const precLancados = preceptorData.reduce((acc, cur) => acc + cur.lancados, 0);
+    const precPerc = precTotal > 0 ? (precLancados / precTotal) * 100 : 0;
+
+    const data = {
+      labels: ['Supervisores', 'Preceptores'],
+      datasets: [{
+        label: '% Lançamento Médio',
+        data: [supPerc, precPerc],
+        backgroundColor: [
+          'rgba(102, 126, 234, 0.7)',
+          'rgba(21, 128, 61, 0.7)'
+        ],
+        borderColor: [
+          'rgba(102, 126, 234, 1)',
+          'rgba(21, 128, 61, 1)'
+        ],
+        borderWidth: 1
+      }]
+    };
+
+    const options = {
+      responsive: true,
+      maintainAspectRatio: false,
+      indexAxis: 'y',
+      scales: {
+        x: {
+          beginAtZero: true,
+          max: 100,
+          ticks: { callback: v => v + '%' }
+        },
+        y: { grid: { display: false } }
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: c => `${c.label}: ${c.parsed.x.toFixed(1)}%`
+          }
+        }
+      }
+    };
+
+    charts.compGeral = criarOuAtualizarChart(charts.compGeral, ctx, 'bar', data, options);
+  }
+
+  function popularFiltros() {
+    ['turma', 'disciplina', 'supervisor', 'preceptor', 'regiao'].forEach(tipo => {
+      const selectEl = selectors[tipo];
+      if (!selectEl) return;
+
+      const placeholder = (tipo === 'disciplina' || tipo === 'regiao' || tipo === 'turma') ? 'Todas' : 'Todos';
+      selectEl.innerHTML = `<option value="">${placeholder}</option>`;
+
+      const key = tipo === 'turma' ? 'turmaTipo' : tipo;
+      let lista = [...new Set(dados.map(d => d[key]))]
+        .filter(item => item && item !== 'N/A');
+
+      if (tipo === 'disciplina') {
+        lista.sort((a, b) => parseInt(a.slice(1), 10) - parseInt(b.slice(1), 10));
+      } else {
+        lista.sort((a, b) => a.localeCompare(b));
+      }
+
+      lista.forEach(item => {
+        const opt = document.createElement('option');
+        opt.value = item;
+        opt.textContent = item;
+        selectEl.appendChild(opt);
+      });
+    });
+  }
+
+  function runFullUpdate() {
+    if (!dados || dados.length === 0) {
+      ui.supervisorTableContainer.innerHTML = '<p style="text-align:center; color:#999; padding: 20px;">Carregue um arquivo CSV para iniciar a análise.</p>';
+      ui.preceptorTableContainer.innerHTML = '<p style="text-align:center; color:#999; padding: 20px;">Selecione um supervisor para ver seus preceptores.</p>';
+      ui.resumoGeralTableContainer.innerHTML = '';
+      ui.aceAcsTableContainer.innerHTML = '';
+      return;
+    }
+
+    const baseFilteredData = filtrarDados();
+    currentAggregatedData = calcularAgregados(baseFilteredData);
+    updateAllUI();
+    setFiltrosHabilitados(true);
+  }
+
+  function exportToCSV(data, filename) {
+    if (!data || data.length === 0) {
+      alert('Não há dados para exportar com os filtros atuais.');
+      return;
+    }
+
+    const dataToExport = data.map(({ name, total, lancados, perc, supervisor }) => ({
+      Nome: name,
+      Lancamentos_Feitos: lancados,
+      Total_de_Registros: total,
+      'Performance (%)': perc.toFixed(2),
+      ...(supervisor ? { Supervisor_Associado: supervisor } : {})
+    }));
+
+    const headers = Object.keys(dataToExport[0]);
+    const csvRows = [headers.join(',')];
+
+    for (const row of dataToExport) {
+      const values = headers.map(header => {
+        let value = row[header];
+        if (typeof value === 'string' && value.includes(',')) {
+          value = '"' + value.replace(/"/g, '""') + '"';
+        }
+        return value;
+      });
+      csvRows.push(values.join(','));
+    }
+
+    const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.setAttribute('hidden', '');
+    a.setAttribute('href', url);
+    a.setAttribute('download', filename);
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
+  function processCsvText(csvText) {
+    const result = Papa.parse(csvText, {
+      header: false,
+      skipEmptyLines: true
+    });
+
+    if (result.errors && result.errors.length > 0) {
+      console.warn('Erros PapaParse:', result.errors);
+    }
+
+    const transformed = transformarDados(result.data);
+    if (!transformed || transformed.length === 0) {
+      throw new Error('Nenhum dado válido encontrado no CSV.');
+    }
+
+    dados = transformed;
+    cache.clear();
+    selectedSupervisor = null;
+    popularFiltros();
+    runFullUpdate();
+  }
+
+  function handleFileSelect(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    setFiltrosHabilitados(false);
+    ui.supervisorTableContainer.innerHTML = '<p style="text-align:center; padding: 20px;">Processando arquivo...</p>';
+    ui.preceptorTableContainer.innerHTML = '<p style="text-align:center; color:#999; padding: 20px;">Carregando dados...</p>';
+
+    const reader = new FileReader();
+    reader.onload = function (ev) {
+      try {
+        const text = ev.target.result;
+        localStorage.setItem(LOCAL_STORAGE_KEY, text);
+        processCsvText(text);
+      } catch (err) {
+        console.error(err);
+        alert('Erro ao processar o arquivo CSV: ' + err.message);
+        setFiltrosHabilitados(false);
+      }
+    };
+    reader.onerror = function () {
+      alert('Erro ao ler o arquivo CSV.');
+      setFiltrosHabilitados(false);
+    };
+    reader.readAsText(file, 'UTF-8');
+  }
+
+  function tryLoadFromLocalStorage() {
+    try {
+      const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
+      if (!saved) {
+        setFiltrosHabilitados(false);
+        ui.supervisorTableContainer.innerHTML = '<p style="text-align:center; color:#999; padding: 20px;">Carregue um arquivo CSV para iniciar a análise.</p>';
+        return;
+      }
+      processCsvText(saved);
+      setFiltrosHabilitados(true);
+    } catch (err) {
+      console.warn('Não foi possível carregar dados do cache local:', err);
+      setFiltrosHabilitados(false);
+      localStorage.removeItem(LOCAL_STORAGE_KEY);
+    }
+  }
+
+  function handleRealTimeSearch() {
+    renderSupervisorTable();
+    if (selectedSupervisor) {
+      renderPreceptorTable();
+    }
+  }
+
+  // Eventos
+  selectors.csvInput.addEventListener('change', handleFileSelect);
+
+  ['turma', 'disciplina', 'supervisor', 'preceptor', 'regiao', 'performance'].forEach(key => {
+    const sel = selectors[key];
+    if (sel) {
+      sel.addEventListener('change', () => debounce(runFullUpdate, 300));
+    }
+  });
+
+  selectors.searchSupervisor.addEventListener('input', () => debounce(handleRealTimeSearch, 250));
+  selectors.searchPreceptor.addEventListener('input', () => debounce(handleRealTimeSearch, 250));
+
+  selectors.btnLimpar.addEventListener('click', () => {
+    ['turma', 'disciplina', 'supervisor', 'preceptor', 'regiao', 'performance'].forEach(key => {
+      const sel = selectors[key];
+      if (sel) sel.value = '';
+    });
+    selectedSupervisor = null;
+    cache.clear();
+    debounce(runFullUpdate, 0);
+  });
+
+  selectors.btnLimparCache.addEventListener('click', () => {
+    cache.clear();
+    localStorage.removeItem(LOCAL_STORAGE_KEY);
+    alert('Cache de filtros e arquivo CSV limpo com sucesso.');
+    setFiltrosHabilitados(false);
+    ui.supervisorTableContainer.innerHTML = '<p style="text-align:center; color:#999; padding: 20px;">Carregue um arquivo CSV para iniciar a análise.</p>';
+    ui.preceptorTableContainer.innerHTML = '<p style="text-align:center; color:#999; padding: 20px;">Selecione um supervisor para ver seus preceptores.</p>';
+    ui.resumoGeralTableContainer.innerHTML = '';
+    ui.aceAcsTableContainer.innerHTML = '';
+  });
+
+  selectors.btnExportSupervisores.addEventListener('click', () => {
+    const performanceFilter = selectors.performance.value;
+    let dataToExport = supervisorData;
+    if (performanceFilter) {
+      dataToExport = supervisorData.filter(d => {
+        if (performanceFilter === 'critical') return d.perc < 80;
+        if (performanceFilter === 'good') return d.perc >= 80 && d.perc < 100;
+        if (performanceFilter === 'excellent') return d.perc === 100;
+        return true;
+      });
+    }
+    exportToCSV(dataToExport, 'supervisores-performance.csv');
+  });
+
+  selectors.btnExportPreceptores.addEventListener('click', () => {
+    let dataToExport = preceptorData;
+    if (selectedSupervisor) {
+      dataToExport = dataToExport.filter(p => p.supervisor === selectedSupervisor);
+    }
+    const performanceFilter = selectors.performance.value;
+    if (performanceFilter) {
+      dataToExport = dataToExport.filter(d => {
+        if (performanceFilter === 'critical') return d.perc < 80;
+        if (performanceFilter === 'good') return d.perc >= 80 && d.perc < 100;
+        if (performanceFilter === 'excellent') return d.perc === 100;
+        return true;
+      });
+    }
+    const filename = selectedSupervisor
+      ? `preceptores-performance-de-${selectedSupervisor.replace(/\s/g, '_')}.csv`
+      : 'preceptores-performance.csv';
+    exportToCSV(dataToExport, filename);
+  });
+
+  // Estado inicial: tenta carregar do cache local
+  setFiltrosHabilitados(false);
+  tryLoadFromLocalStorage();
+});
+</script>
+</body>
+</html>
