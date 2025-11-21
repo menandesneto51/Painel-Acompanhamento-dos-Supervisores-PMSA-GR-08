@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Dashboard Executivo (v11.2 - Busca Inteligente + Cache Local)</title>
+  <title>Dashboard Executivo (v12.8 - Lógica de Negócio Final)</title>
 
   <!-- Bibliotecas CDN -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
@@ -214,8 +214,8 @@
 <body>
   <div class="container">
     <header class="header">
-      <h1>Programa Mais Saúde Com Agente – Monitoramento de Lançamento de Notas CR8</h1>
-      <p>Versão com busca em tempo real e cache local do último arquivo carregado.</p>
+      <h1>Programa Mais Saúde Com Agente – Monitoramento de Lançamento de Notas v2.8</h1>
+      <p>Análise com nomenclatura de turma (MACE/MACS) e lógica de negócio final.</p>
     </header>
 
     <main class="content">
@@ -260,7 +260,7 @@
             <button id="btnLimparFiltros" disabled>Limpar Filtros</button>
           </div>
           <div class="filter-group">
-            <label>&nbsp;</label>
+            <label>Limpar Cache de Análise</label>
             <button id="btnLimparCache" disabled>Limpar Cache</button>
           </div>
           <div class="filter-group">
@@ -333,7 +333,6 @@
 <script>
 document.addEventListener('DOMContentLoaded', function () {
   const VALOR_PENDENTE = 'sem nota';
-  const LOCAL_STORAGE_KEY = 'dashboard_cr8_last_csv_v11_2';
 
   let dados = [];
   let debounceTimer;
@@ -341,38 +340,21 @@ document.addEventListener('DOMContentLoaded', function () {
   let preceptorData = [];
   let selectedSupervisor = null;
   let charts = { compGeral: null };
-  let currentAggregatedData = {
-    total: 0,
-    lancados: 0,
-    porSupervisor: {},
-    porPreceptor: {},
-    porTurmaTipo: {},
-    porRegiao: {},
-    preceptorSupervisorLink: {}
-  };
+  let disciplineNamesForFilter = [];
+  let currentAggregatedData = { total: 0, lancados: 0, porSupervisor: {}, porPreceptor: {}, porTurmaTipo: {}, porRegiao: {}, preceptorSupervisorLink: {} };
 
   class IntelligentCache {
     constructor(maxSize = 50) {
       this.cache = new Map();
       this.maxSize = maxSize;
     }
-    generateKey(filters = {}) {
-      const sortedKeys = Object.keys(filters).sort();
-      return sortedKeys.map(key => `${key}:${filters[key]}`).join('|');
-    }
-    get(key) {
-      return this.cache.has(key) ? this.cache.get(key) : null;
-    }
+    generateKey(filters = {}) { return Object.keys(filters).sort().map(key => `${key}:${filters[key]}`).join('|'); }
+    get(key) { return this.cache.has(key) ? this.cache.get(key) : null; }
     set(key, value) {
-      if (this.cache.size >= this.maxSize) {
-        const firstKey = this.cache.keys().next().value;
-        this.cache.delete(firstKey);
-      }
+      if (this.cache.size >= this.maxSize) { this.cache.delete(this.cache.keys().next().value); }
       this.cache.set(key, value);
     }
-    clear() {
-      this.cache.clear();
-    }
+    clear() { this.cache.clear(); }
   }
 
   const cache = new IntelligentCache(100);
@@ -412,107 +394,129 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   function setFiltrosHabilitados(enabled) {
-    const toToggle = [
-      selectors.turma,
-      selectors.disciplina,
-      selectors.supervisor,
-      selectors.preceptor,
-      selectors.regiao,
-      selectors.performance,
-      selectors.searchSupervisor,
-      selectors.searchPreceptor,
-      selectors.btnLimpar,
-      selectors.btnLimparCache,
-      selectors.btnExportSupervisores,
-      selectors.btnExportPreceptores
-    ];
+    const toToggle = [ selectors.turma, selectors.disciplina, selectors.supervisor, selectors.preceptor, selectors.regiao, selectors.performance, selectors.searchSupervisor, selectors.searchPreceptor, selectors.btnLimpar, selectors.btnLimparCache, selectors.btnExportSupervisores, selectors.btnExportPreceptores ];
     toToggle.forEach(el => { if (el) el.disabled = !enabled; });
-    selectors.csvInput.disabled = false; // sempre pode trocar de arquivo
+    selectors.csvInput.disabled = false;
   }
 
   function ehLancado(rec) {
     const v = String(rec.nota ?? '').trim().toLowerCase();
-    return v && v !== VALOR_PENDENTE && v !== '0' && v !== '0.000';
+    return v && v !== VALOR_PENDENTE && v !== 'apr' && v !== '0' && v !== '0.0000';
   }
-
+  
+  // ============== INÍCIO DA LÓGICA DE TRANSFORMAÇÃO FINAL ==============
   function transformarDados(rows) {
-    const headerRow = (rows[0] || []).map(h => String(h || '').trim().toLowerCase().replace(/"/g, ''));
-
-    // Estrutura conhecida: Supervisor, Preceptor, Turma, Aluno, UF, 15..28
-    const columnMap = { supervisor: 0, preceptor: 1, turma: 2, aluno: 3, uf: 4 };
-
-    if (headerRow.length < 5 || !headerRow[0].includes('supervisor')) {
-      console.warn('Cabeçalho inesperado:', headerRow);
-    }
-
-    const disciplineMap = {};
-    for (let d = 15; d <= 28; d++) {
-      const dStr = String(d);
-      const idxs = headerRow
-        .map((h, i) => (h === dStr ? i : -1))
-        .filter(i => i !== -1);
-      disciplineMap[dStr] = idxs;
-    }
-
-    const dadosLongos = [];
-    const dataRows = rows.slice(1);
-
-    for (let i = 0; i < dataRows.length; i++) {
-      try {
-        const row = dataRows[i].map(d => String(d || '').trim());
-        if (row.length < 5) continue;
-
-        const turmaOriginal = (row[columnMap.turma] || '').trim();
-        if (!turmaOriginal) continue;
-
-        const nomeAluno = (row[columnMap.aluno] || '').trim();
-        if (!nomeAluno) continue;
-
-        const supervisor = (row[columnMap.supervisor] || 'N/A').trim();
-        const preceptor = (row[columnMap.preceptor] || 'N/A').trim();
-        const uf = (row[columnMap.uf] || 'N/A').trim();
-        const turmaTipo = turmaOriginal.toUpperCase().includes('ACE') ? 'ACE' : 'ACS';
-
-        let regiao = 'MT (Outros)';
-        if (uf.toUpperCase() === 'RO') regiao = 'Rondônia';
-        else if (uf.toUpperCase() === 'PR') regiao = 'Paraná';
-
-        const base = { supervisor, preceptor, turma: turmaOriginal, turmaTipo, aluno: nomeAluno, regiao };
-
-        for (let d = 15; d <= 28; d++) {
-          const idxs = disciplineMap[String(d)];
-          if (!idxs || idxs.length === 0) continue;
-
-          let colIndex = -1;
-          if (d <= 23) {
-            colIndex = idxs[0];
-          } else {
-            if (idxs.length === 1) colIndex = idxs[0];
-            else if (idxs.length > 1) colIndex = turmaTipo === 'ACE' ? idxs[1] : idxs[0];
-          }
-
-          if (colIndex !== -1 && colIndex < row.length) {
-            let nota = (row[colIndex] ? row[colIndex].trim() : '') || VALOR_PENDENTE;
-            dadosLongos.push({ ...base, disciplina: `D${d}`, nota });
-          }
-        }
-      } catch (e) {
-        console.warn(`Erro ao processar linha ${i}:`, e);
+      if (!rows || rows.length < 3) {
+          throw new Error("O arquivo CSV precisa ter pelo menos 3 linhas (2 de cabeçalho e 1 de dados).");
       }
-    }
 
-    return dadosLongos;
+      const disciplineNamesHeader = (rows[0] || []).map(h => String(h || '').trim().toUpperCase());
+      const mainHeader = (rows[1] || []).map(h => String(h || '').trim().toUpperCase());
+      const dataRows = rows.slice(2);
+      
+      const getColumnIndex = (header, potentialNames) => {
+          for (const name of potentialNames) {
+              const index = header.indexOf(name.toUpperCase());
+              if (index !== -1) return index;
+          }
+          return -1;
+      };
+
+      const colIdx = {
+          supervisor: getColumnIndex(mainHeader, ['SUPERVISOR', 'NOME SUPERVISOR']),
+          preceptor: getColumnIndex(mainHeader, ['PRECEPTOR', 'NOME PRECEPTOR']),
+          turma: getColumnIndex(mainHeader, ['GRUPO', 'TURMA']),
+          aluno: getColumnIndex(mainHeader, ['CURSISTA', 'ALUNO', 'NOME ALUNO']),
+          uf: getColumnIndex(mainHeader, ['UF', 'ESTADO'])
+      };
+      
+      const missingColumns = ['aluno', 'turma', 'supervisor', 'preceptor'].filter(key => colIdx[key] === -1);
+      if (missingColumns.length > 0) {
+          throw new Error(`Na linha 2 do arquivo, não foi possível encontrar as colunas: ${missingColumns.join(', ')}.\n\nCabeçalhos encontrados na Linha 2: ${mainHeader.join(', ')}`);
+      }
+      
+      const disciplineMap = {};
+      const processedIndexes = new Set(Object.values(colIdx).filter(i => i !== -1));
+      disciplineNamesForFilter = [];
+
+      for (let i = 0; i < disciplineNamesHeader.length; i++) {
+          if (processedIndexes.has(i)) continue;
+
+          const discName = disciplineNamesHeader[i];
+          if (!discName) continue;
+
+          if (i + 1 < disciplineNamesHeader.length && disciplineNamesHeader[i+1] === discName) {
+              disciplineMap[discName] = { ACS: i, ACE: i + 1 };
+              processedIndexes.add(i);
+              processedIndexes.add(i + 1);
+          } else {
+              disciplineMap[discName] = { common: i };
+              processedIndexes.add(i);
+          }
+          if(!disciplineNamesForFilter.includes(discName)) {
+            disciplineNamesForFilter.push(discName);
+          }
+      }
+      
+      if (Object.keys(disciplineMap).length === 0) {
+          alert("Aviso: Nenhuma coluna de disciplina foi identificada. Verifique as linhas 1 e 2 do seu arquivo.");
+      }
+
+      const dadosLongos = [];
+      let supervisorAtual = 'N/A';
+      let preceptorAtual = 'N/A';
+
+      for (const row of dataRows) {
+          try {
+              if (row.every(cell => !cell || cell.trim() === '')) continue;
+
+              const nomeAluno = (row[colIdx.aluno] || '').trim();
+              if (!nomeAluno) continue;
+
+              const supervisorDaLinha = (row[colIdx.supervisor] || '').trim();
+              if (supervisorDaLinha) supervisorAtual = supervisorDaLinha;
+              
+              const preceptorDaLinha = (row[colIdx.preceptor] || '').trim();
+              if (preceptorDaLinha) preceptorAtual = preceptorDaLinha;
+
+              const turmaOriginal = (row[colIdx.turma] || '').trim();
+              if (!turmaOriginal) continue;
+
+              const uf = colIdx.uf !== -1 ? (row[colIdx.uf] || 'N/A').trim() : 'N/A';
+              
+              // *** LINHA CORRIGIDA ***
+              const turmaTipo = turmaOriginal.toUpperCase().includes('MACE') ? 'ACE' : 'ACS';
+              
+              let regiao = 'MT (Outros)';
+              if (uf.toUpperCase() === 'RO') regiao = 'Rondônia';
+              else if (uf.toUpperCase() === 'PR') regiao = 'Paraná';
+
+              const base = { supervisor: supervisorAtual, preceptor: preceptorAtual, turma: turmaOriginal, turmaTipo, aluno: nomeAluno, regiao };
+
+              for (const discName in disciplineMap) {
+                  const mapping = disciplineMap[discName];
+                  let colIndex = -1;
+
+                  if (mapping.common !== undefined) {
+                      colIndex = mapping.common;
+                  } else {
+                      colIndex = mapping[turmaTipo];
+                  }
+
+                  const nota = (colIndex !== undefined && colIndex < row.length) ? (row[colIndex] || '').trim() || VALOR_PENDENTE : VALOR_PENDENTE;
+                  dadosLongos.push({ ...base, disciplina: discName, nota });
+              }
+          } catch (e) {
+              console.warn(`Erro ao processar linha de dados:`, e, row);
+          }
+      }
+      return dadosLongos;
   }
+  // ============== FIM DA LÓGICA DE TRANSFORMAÇÃO FINAL ==============
+
 
   function generateFilterKey() {
-    const filters = {
-      turma: selectors.turma.value || '',
-      disciplina: selectors.disciplina.value || '',
-      supervisor: selectors.supervisor.value || '',
-      preceptor: selectors.preceptor.value || '',
-      regiao: selectors.regiao.value || '',
-      performance: selectors.performance.value || ''
-    };
+    const filters = { turma: selectors.turma.value || '', disciplina: selectors.disciplina.value || '', supervisor: selectors.supervisor.value || '', preceptor: selectors.preceptor.value || '', regiao: selectors.regiao.value || '', performance: selectors.performance.value || '' };
     return cache.generateKey(filters);
   }
 
@@ -520,22 +524,13 @@ document.addEventListener('DOMContentLoaded', function () {
     const key = `filter_${generateFilterKey()}`;
     const cached = cache.get(key);
     if (cached) return cached;
-
-    const f = {
-      turma: selectors.turma.value,
-      disciplina: selectors.disciplina.value,
-      supervisor: selectors.supervisor.value,
-      preceptor: selectors.preceptor.value,
-      regiao: selectors.regiao.value
-    };
-
+    const f = { turma: selectors.turma.value, disciplina: selectors.disciplina.value, supervisor: selectors.supervisor.value, preceptor: selectors.preceptor.value, regiao: selectors.regiao.value };
     let result = dados;
     if (f.turma) result = result.filter(d => d.turmaTipo === f.turma);
     if (f.disciplina) result = result.filter(d => d.disciplina === f.disciplina);
     if (f.supervisor) result = result.filter(d => d.supervisor === f.supervisor);
     if (f.preceptor) result = result.filter(d => d.preceptor === f.preceptor);
     if (f.regiao) result = result.filter(d => d.regiao === f.regiao);
-
     cache.set(key, result);
     return result;
   }
@@ -544,49 +539,29 @@ document.addEventListener('DOMContentLoaded', function () {
     const key = `agg_${generateFilterKey()}_${registros.length}`;
     const cached = cache.get(key);
     if (cached) return cached;
-
-    const ag = {
-      total: registros.length,
-      lancados: 0,
-      porSupervisor: {},
-      porPreceptor: {},
-      porTurmaTipo: {},
-      porRegiao: {},
-      preceptorSupervisorLink: {}
-    };
-
+    const ag = { total: registros.length, lancados: 0, porSupervisor: {}, porPreceptor: {}, porTurmaTipo: {}, porRegiao: {}, preceptorSupervisorLink: {} };
     registros.forEach(r => {
       const lanc = ehLancado(r);
       if (lanc) ag.lancados++;
-
-      const supervisor = r.supervisor || 'N/A';
-      const preceptor = r.preceptor || 'N/A';
-      const turmaTipo = r.turmaTipo || 'N/A';
-      const regiao = r.regiao || 'N/A';
-
+      const supervisor = r.supervisor || 'N/A', preceptor = r.preceptor || 'N/A', turmaTipo = r.turmaTipo || 'N/A', regiao = r.regiao || 'N/A';
       ['supervisor', 'preceptor', 'turmaTipo', 'regiao'].forEach(key => {
         const nome = r[key] || 'N/A';
+        if (nome === 'N/A' || nome.trim() === '') return;
         const mapKey = `por${key.charAt(0).toUpperCase() + key.slice(1)}`;
         if (!ag[mapKey][nome]) ag[mapKey][nome] = { total: 0, lancados: 0 };
         ag[mapKey][nome].total++;
         if (lanc) ag[mapKey][nome].lancados++;
       });
-
-      if (preceptor !== 'N/A' && supervisor !== 'N/A') {
+      if (preceptor !== 'N/A' && supervisor !== 'N/A' && preceptor.trim() !== '' && supervisor.trim() !== '') {
         if (!ag.preceptorSupervisorLink[preceptor]) ag.preceptorSupervisorLink[preceptor] = {};
         if (!ag.preceptorSupervisorLink[preceptor][supervisor]) ag.preceptorSupervisorLink[preceptor][supervisor] = 0;
         ag.preceptorSupervisorLink[preceptor][supervisor]++;
       }
     });
-
     Object.keys(ag.preceptorSupervisorLink).forEach(preceptor => {
       const supervisors = ag.preceptorSupervisorLink[preceptor];
-      const primarySupervisor = Object.keys(supervisors).reduce((a, b) =>
-        supervisors[a] > supervisors[b] ? a : b
-      );
-      ag.preceptorSupervisorLink[preceptor] = primarySupervisor;
+      ag.preceptorSupervisorLink[preceptor] = Object.keys(supervisors).reduce((a, b) => supervisors[a] > supervisors[b] ? a : b);
     });
-
     cache.set(key, ag);
     return ag;
   }
@@ -602,102 +577,49 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   function updateAllUI() {
-    const total = currentAggregatedData.total;
-    const lancados = currentAggregatedData.lancados;
-
+    const { total, lancados } = currentAggregatedData;
     const percLancados = total > 0 ? (lancados / total) * 100 : 0;
     const pendentes = total - lancados;
     const percPendentes = total > 0 ? (pendentes / total) * 100 : 0;
-
     ui.kpiPercentualGeral.textContent = `${percLancados.toFixed(1)}%`;
     ui.kpiAlunos.textContent = `${total.toLocaleString('pt-BR')} registros`;
     ui.kpiPendentes.textContent = pendentes.toLocaleString('pt-BR');
     ui.kpiPendentesPercent.textContent = `${percPendentes.toFixed(1)}% do total`;
-
     prepareAndRenderTables(currentAggregatedData);
     updateSummaryTables(currentAggregatedData);
   }
 
   function prepareAndRenderTables(ag) {
-    supervisorData = Object.entries(ag.porSupervisor)
-      .filter(([name]) => name !== 'N/A')
-      .map(([name, { total, lancados }]) => ({
-        name,
-        total,
-        lancados,
-        perc: total > 0 ? (lancados / total) * 100 : 0
-      }))
-      .sort((a, b) => b.perc - a.perc);
-
-    preceptorData = Object.entries(ag.porPreceptor)
-      .filter(([name]) => name !== 'N/A')
-      .map(([name, { total, lancados }]) => ({
-        name,
-        total,
-        lancados,
-        perc: total > 0 ? (lancados / total) * 100 : 0,
-        supervisor: ag.preceptorSupervisorLink[name] || 'N/A'
-      }))
-      .sort((a, b) => b.perc - a.perc);
-
+    supervisorData = Object.entries(ag.porSupervisor).filter(([name]) => name !== 'N/A').map(([name, { total, lancados }]) => ({ name, total, lancados, perc: total > 0 ? (lancados / total) * 100 : 0 })).sort((a, b) => b.perc - a.perc);
+    preceptorData = Object.entries(ag.porPreceptor).filter(([name]) => name !== 'N/A').map(([name, { total, lancados }]) => ({ name, total, lancados, perc: total > 0 ? (lancados / total) * 100 : 0, supervisor: ag.preceptorSupervisorLink[name] || 'N/A' })).sort((a, b) => b.perc - a.perc);
     renderSupervisorTable();
-
-    if (selectedSupervisor) {
-      renderPreceptorTable();
-    } else {
+    if (selectedSupervisor) { renderPreceptorTable(); } 
+    else {
       ui.preceptorTableContainer.innerHTML = '<p style="text-align:center; color:#999; padding: 20px;">Selecione um supervisor para ver seus preceptores.</p>';
       ui.preceptorTableTitle.textContent = 'Preceptores';
     }
   }
 
   function renderSupervisorTable() {
-    const performanceFilter = selectors.performance.value;
     let dataToRender = supervisorData.slice();
-
-    if (performanceFilter) {
-      dataToRender = dataToRender.filter(d => {
-        if (performanceFilter === 'critical') return d.perc < 80;
-        if (performanceFilter === 'good') return d.perc >= 80 && d.perc < 100;
-        if (performanceFilter === 'excellent') return d.perc === 100;
-        return true;
-      });
-    }
-
+    const performanceFilter = selectors.performance.value;
+    if (performanceFilter) { dataToRender = dataToRender.filter(d => { if (performanceFilter === 'critical') return d.perc < 80; if (performanceFilter === 'good') return d.perc >= 80 && d.perc < 100; if (performanceFilter === 'excellent') return d.perc >= 99.9; return true; }); }
     const searchTerm = selectors.searchSupervisor.value.toLowerCase().trim();
-    if (searchTerm) {
-      dataToRender = dataToRender.filter(d => d.name.toLowerCase().includes(searchTerm));
-    }
-
+    if (searchTerm) { dataToRender = dataToRender.filter(d => d.name.toLowerCase().includes(searchTerm)); }
     ui.supervisorTableContainer.innerHTML = generatePerformanceTableHTML(dataToRender, 'supervisor');
-
     ui.supervisorTableContainer.querySelectorAll('tr[data-supervisor-name]').forEach(tr => {
       tr.addEventListener('click', handleSupervisorSelection);
-      if (tr.dataset.supervisorName === selectedSupervisor) {
-        tr.classList.add('selected-row');
-      }
+      if (tr.dataset.supervisorName === selectedSupervisor) tr.classList.add('selected-row');
     });
   }
 
   function renderPreceptorTable() {
     if (!selectedSupervisor) return;
-
-    const performanceFilter = selectors.performance.value;
     let filteredPreceptors = preceptorData.filter(p => p.supervisor === selectedSupervisor);
-
-    if (performanceFilter) {
-      filteredPreceptors = filteredPreceptors.filter(d => {
-        if (performanceFilter === 'critical') return d.perc < 80;
-        if (performanceFilter === 'good') return d.perc >= 80 && d.perc < 100;
-        if (performanceFilter === 'excellent') return d.perc === 100;
-        return true;
-      });
-    }
-
+    const performanceFilter = selectors.performance.value;
+    if (performanceFilter) { filteredPreceptors = filteredPreceptors.filter(d => { if (performanceFilter === 'critical') return d.perc < 80; if (performanceFilter === 'good') return d.perc >= 80 && d.perc < 100; if (performanceFilter === 'excellent') return d.perc >= 99.9; return true; });}
     const searchTerm = selectors.searchPreceptor.value.toLowerCase().trim();
-    if (searchTerm) {
-      filteredPreceptors = filteredPreceptors.filter(d => d.name.toLowerCase().includes(searchTerm));
-    }
-
+    if (searchTerm) { filteredPreceptors = filteredPreceptors.filter(d => d.name.toLowerCase().includes(searchTerm)); }
     ui.preceptorTableContainer.innerHTML = generatePerformanceTableHTML(filteredPreceptors, 'preceptor');
     ui.preceptorTableTitle.textContent = `Preceptores de ${selectedSupervisor}`;
   }
@@ -706,7 +628,6 @@ document.addEventListener('DOMContentLoaded', function () {
     const row = e.target.closest('tr');
     if (!row) return;
     const supervisorName = row.dataset.supervisorName;
-
     if (selectedSupervisor === supervisorName) {
       selectedSupervisor = null;
       row.classList.remove('selected-row');
@@ -721,185 +642,60 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   function generatePerformanceTableHTML(data, type) {
-    if (!data || data.length === 0) {
-      return `<p style="text-align:center; color:#999; padding: 20px;">Nenhum ${type} para exibir com os filtros atuais.</p>`;
-    }
-
-    const headers = [
-      { key: 'rank', label: '#' },
-      { key: 'name', label: 'Nome' },
-      { key: 'lancados', label: 'Lançamentos' },
-      { key: 'perc', label: '%' },
-      { key: 'perc_bar', label: 'Performance' }
-    ];
-
-    let headerHTML = '<thead><tr>';
-    headers.forEach(h => {
-      headerHTML += `<th>${h.label}</th>`;
-    });
-    headerHTML += '</tr></thead>';
-
+    if (!data || data.length === 0) return `<p style="text-align:center; color:#999; padding: 20px;">Nenhum ${type} para exibir com os filtros atuais.</p>`;
+    const headers = [ { key: 'rank', label: '#' }, { key: 'name', label: 'Nome' }, { key: 'lancados', label: 'Lançamentos' }, { key: 'perc', label: '%' }, { key: 'perc_bar', label: 'Performance' } ];
+    let headerHTML = '<thead><tr>' + headers.map(h => `<th>${h.label}</th>`).join('') + '</tr></thead>';
     let bodyHTML = '<tbody>';
     data.forEach((item, index) => {
       const perc = item.perc;
       let statusClass = 'critical';
-      if (perc === 100) statusClass = 'excellent';
-      else if (perc >= 80) statusClass = 'good';
-
+      if (perc >= 99.9) statusClass = 'excellent'; else if (perc >= 80) statusClass = 'good';
       const supervisorAttr = type === 'supervisor' ? `data-supervisor-name="${item.name}"` : '';
-
-      bodyHTML += `
-        <tr class="${statusClass}" ${supervisorAttr}>
-          <td class="td-rank">${index + 1}</td>
-          <td class="td-name">${item.name}</td>
-          <td>${item.lancados}/${item.total}</td>
-          <td class="td-perc ${statusClass}">${perc.toFixed(1)}%</td>
-          <td>
-            <div class="performance-bar-container">
-              <div class="performance-bar" style="width: ${Math.min(perc, 100)}%;"></div>
-            </div>
-          </td>
-        </tr>`;
+      bodyHTML += `<tr class="${statusClass}" ${supervisorAttr}> <td class="td-rank">${index + 1}</td> <td class="td-name">${item.name}</td> <td>${item.lancados}/${item.total}</td> <td class="td-perc ${statusClass}">${perc.toFixed(1)}%</td> <td> <div class="performance-bar-container"> <div class="performance-bar" style="width: ${Math.min(perc, 100)}%;"></div> </div> </td> </tr>`;
     });
     bodyHTML += '</tbody>';
-
     return `<table class="performance-table">${headerHTML}${bodyHTML}</table>`;
   }
 
   function updateSummaryTables(ag) {
-    const lancados = ag.lancados;
-    const pendentes = ag.total - lancados;
-    const total = ag.total;
+    const { lancados, total } = ag;
     const percLancados = total > 0 ? (lancados / total) * 100 : 0;
-    const percPendentes = total > 0 ? (pendentes / total) * 100 : 0;
-
+    const pendentes = total - lancados;
     let resumoHTML = '<table class="performance-table"><tbody>';
-    resumoHTML += `
-      <tr class="excellent">
-        <td class="td-name">Lançados</td>
-        <td>${lancados.toLocaleString('pt-BR')}</td>
-        <td class="td-perc excellent">${percLancados.toFixed(1)}%</td>
-        <td>
-          <div class="performance-bar-container">
-            <div class="performance-bar" style="width: ${Math.min(percLancados, 100)}%;"></div>
-          </div>
-        </td>
-      </tr>
-      <tr class="critical">
-        <td class="td-name">Pendentes</td>
-        <td>${pendentes.toLocaleString('pt-BR')}</td>
-        <td class="td-perc critical">${percPendentes.toFixed(1)}%</td>
-        <td>
-          <div class="performance-bar-container">
-            <div class="performance-bar" style="width: ${Math.min(percPendentes, 100)}%;"></div>
-          </div>
-        </td>
-      </tr>`;
-    resumoHTML += '</tbody></table>';
-    ui.resumoGeralTableContainer.innerHTML = resumoHTML;
+    resumoHTML += `<tr class="excellent"><td class="td-name">Lançados</td><td>${lancados.toLocaleString('pt-BR')}</td><td class="td-perc excellent">${percLancados.toFixed(1)}%</td><td><div class="performance-bar-container"><div class="performance-bar" style="width: ${percLancados}%;"></div></div></td></tr>`;
+    resumoHTML += `<tr class="critical"><td class="td-name">Pendentes</td><td>${pendentes.toLocaleString('pt-BR')}</td><td class="td-perc critical">${(total > 0 ? (pendentes / total) * 100 : 0).toFixed(1)}%</td><td><div class="performance-bar-container"><div class="performance-bar" style="width: ${(total > 0 ? (pendentes / total) * 100 : 0)}%;"></div></div></td></tr>`;
+    ui.resumoGeralTableContainer.innerHTML = resumoHTML + '</tbody></table>';
 
-    const turmaData = Object.entries(ag.porTurmaTipo)
-      .filter(([name]) => name !== 'N/A')
-      .map(([name, { total, lancados }]) => ({
-        name,
-        total,
-        lancados,
-        perc: total > 0 ? (lancados / total) * 100 : 0
-      }))
-      .sort((a, b) => b.perc - a.perc);
-
+    const turmaData = Object.entries(ag.porTurmaTipo).filter(([name]) => name !== 'N/A').map(([name, { total, lancados }]) => ({ name, total, lancados, perc: total > 0 ? (lancados / total) * 100 : 0 })).sort((a, b) => b.perc - a.perc);
     let aceAcsHTML = '<table class="performance-table"><tbody>';
     if (turmaData.length > 0) {
       turmaData.forEach(item => {
-        const perc = item.perc;
-        let statusClass = 'critical';
-        if (perc === 100) statusClass = 'excellent';
-        else if (perc >= 80) statusClass = 'good';
-        aceAcsHTML += `
-          <tr class="${statusClass}">
-            <td class="td-name">${item.name}</td>
-            <td>${item.lancados}/${item.total}</td>
-            <td class="td-perc ${statusClass}">${perc.toFixed(1)}%</td>
-            <td>
-              <div class="performance-bar-container">
-                <div class="performance-bar" style="width: ${Math.min(perc, 100)}%;"></div>
-              </div>
-            </td>
-          </tr>`;
+        let statusClass = 'critical'; if (item.perc >= 99.9) statusClass = 'excellent'; else if (item.perc >= 80) statusClass = 'good';
+        aceAcsHTML += `<tr class="${statusClass}"><td class="td-name">${item.name}</td><td>${item.lancados}/${item.total}</td><td class="td-perc ${statusClass}">${item.perc.toFixed(1)}%</td><td><div class="performance-bar-container"><div class="performance-bar" style="width: ${item.perc}%;"></div></div></td></tr>`;
       });
-    } else {
-      aceAcsHTML += '<tr><td colspan="4" style="text-align:center; color:#999;">Nenhum dado de turma para exibir.</td></tr>';
-    }
-    aceAcsHTML += '</tbody></table>';
-    ui.aceAcsTableContainer.innerHTML = aceAcsHTML;
+    } else { aceAcsHTML += '<tr><td colspan="4" style="text-align:center; color:#999;">Nenhum dado de turma para exibir.</td></tr>'; }
+    ui.aceAcsTableContainer.innerHTML = aceAcsHTML + '</tbody></table>';
 
-    const ctx = ui.compGeralChart.getContext('2d');
-    const supTotal = supervisorData.reduce((acc, cur) => acc + cur.total, 0);
-    const supLancados = supervisorData.reduce((acc, cur) => acc + cur.lancados, 0);
-    const supPerc = supTotal > 0 ? (supLancados / supTotal) * 100 : 0;
-
-    const precTotal = preceptorData.reduce((acc, cur) => acc + cur.total, 0);
-    const precLancados = preceptorData.reduce((acc, cur) => acc + cur.lancados, 0);
-    const precPerc = precTotal > 0 ? (precLancados / precTotal) * 100 : 0;
-
-    const data = {
-      labels: ['Supervisores', 'Preceptores'],
-      datasets: [{
-        label: '% Lançamento Médio',
-        data: [supPerc, precPerc],
-        backgroundColor: [
-          'rgba(102, 126, 234, 0.7)',
-          'rgba(21, 128, 61, 0.7)'
-        ],
-        borderColor: [
-          'rgba(102, 126, 234, 1)',
-          'rgba(21, 128, 61, 1)'
-        ],
-        borderWidth: 1
-      }]
-    };
-
-    const options = {
-      responsive: true,
-      maintainAspectRatio: false,
-      indexAxis: 'y',
-      scales: {
-        x: {
-          beginAtZero: true,
-          max: 100,
-          ticks: { callback: v => v + '%' }
-        },
-        y: { grid: { display: false } }
-      },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: c => `${c.label}: ${c.parsed.x.toFixed(1)}%`
-          }
-        }
-      }
-    };
-
-    charts.compGeral = criarOuAtualizarChart(charts.compGeral, ctx, 'bar', data, options);
+    const supPerc = (supervisorData.reduce((acc, cur) => acc + cur.lancados, 0) / supervisorData.reduce((acc, cur) => acc + cur.total, 0)) * 100 || 0;
+    const precPerc = (preceptorData.reduce((acc, cur) => acc + cur.lancados, 0) / preceptorData.reduce((acc, cur) => acc + cur.total, 0)) * 100 || 0;
+    const chartData = { labels: ['Supervisores', 'Preceptores'], datasets: [{ label: '% Lançamento Médio', data: [supPerc, precPerc], backgroundColor: ['rgba(102, 126, 234, 0.7)', 'rgba(21, 128, 61, 0.7)'], borderWidth: 1 }] };
+    const chartOptions = { responsive: true, maintainAspectRatio: false, indexAxis: 'y', scales: { x: { beginAtZero: true, max: 100, ticks: { callback: v => v + '%' } }, y: { grid: { display: false } } }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => `${c.label}: ${c.parsed.x.toFixed(1)}%` } } } };
+    charts.compGeral = criarOuAtualizarChart(charts.compGeral, ui.compGeralChart.getContext('2d'), 'bar', chartData, chartOptions);
   }
 
   function popularFiltros() {
     ['turma', 'disciplina', 'supervisor', 'preceptor', 'regiao'].forEach(tipo => {
       const selectEl = selectors[tipo];
       if (!selectEl) return;
-
-      const placeholder = (tipo === 'disciplina' || tipo === 'regiao' || tipo === 'turma') ? 'Todas' : 'Todos';
-      selectEl.innerHTML = `<option value="">${placeholder}</option>`;
-
-      const key = tipo === 'turma' ? 'turmaTipo' : tipo;
-      let lista = [...new Set(dados.map(d => d[key]))]
-        .filter(item => item && item !== 'N/A');
-
+      const placeholder = (tipo === 'regiao' || tipo === 'turma') ? 'Todas' : 'Todos';
+      selectEl.innerHTML = `<option value="">${tipo === 'disciplina' ? 'Todas' : placeholder}</option>`;
+      
+      let lista;
       if (tipo === 'disciplina') {
-        lista.sort((a, b) => parseInt(a.slice(1), 10) - parseInt(b.slice(1), 10));
+        lista = disciplineNamesForFilter.sort((a,b) => a.localeCompare(b));
       } else {
-        lista.sort((a, b) => a.localeCompare(b));
+        const key = tipo === 'turma' ? 'turmaTipo' : tipo;
+        lista = [...new Set(dados.map(d => d[key]))].filter(item => item && item !== 'N/A' && item.trim() !== '').sort((a, b) => a.localeCompare(b));
       }
 
       lista.forEach(item => {
@@ -913,13 +709,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
   function runFullUpdate() {
     if (!dados || dados.length === 0) {
+      setFiltrosHabilitados(false);
       ui.supervisorTableContainer.innerHTML = '<p style="text-align:center; color:#999; padding: 20px;">Carregue um arquivo CSV para iniciar a análise.</p>';
-      ui.preceptorTableContainer.innerHTML = '<p style="text-align:center; color:#999; padding: 20px;">Selecione um supervisor para ver seus preceptores.</p>';
-      ui.resumoGeralTableContainer.innerHTML = '';
-      ui.aceAcsTableContainer.innerHTML = '';
       return;
     }
-
     const baseFilteredData = filtrarDados();
     currentAggregatedData = calcularAgregados(baseFilteredData);
     updateAllUI();
@@ -927,188 +720,74 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   function exportToCSV(data, filename) {
-    if (!data || data.length === 0) {
-      alert('Não há dados para exportar com os filtros atuais.');
-      return;
-    }
-
-    const dataToExport = data.map(({ name, total, lancados, perc, supervisor }) => ({
-      Nome: name,
-      Lancamentos_Feitos: lancados,
-      Total_de_Registros: total,
-      'Performance (%)': perc.toFixed(2),
-      ...(supervisor ? { Supervisor_Associado: supervisor } : {})
-    }));
-
+    if (!data || data.length === 0) { alert('Não há dados para exportar com os filtros atuais.'); return; }
+    const dataToExport = data.map(({ name, total, lancados, perc, supervisor }) => ({ Nome: name, Lancamentos_Feitos: lancados, Total_de_Registros: total, 'Performance (%)': perc.toFixed(2), ...(supervisor ? { Supervisor_Associado: supervisor } : {}) }));
     const headers = Object.keys(dataToExport[0]);
     const csvRows = [headers.join(',')];
-
     for (const row of dataToExport) {
-      const values = headers.map(header => {
-        let value = row[header];
-        if (typeof value === 'string' && value.includes(',')) {
-          value = '"' + value.replace(/"/g, '""') + '"';
-        }
-        return value;
-      });
+      const values = headers.map(header => { let value = row[header]; if (typeof value === 'string' && value.includes(',')) { value = '"' + value.replace(/"/g, '""') + '"'; } return value; });
       csvRows.push(values.join(','));
     }
-
     const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.setAttribute('hidden', '');
-    a.setAttribute('href', url);
-    a.setAttribute('download', filename);
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    a.setAttribute('hidden', ''); a.setAttribute('href', url); a.setAttribute('download', filename);
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
   }
 
-  function processCsvText(csvText) {
-    const result = Papa.parse(csvText, {
-      header: false,
-      skipEmptyLines: true
-    });
-
-    if (result.errors && result.errors.length > 0) {
-      console.warn('Erros PapaParse:', result.errors);
-    }
-
-    const transformed = transformarDados(result.data);
-    if (!transformed || transformed.length === 0) {
-      throw new Error('Nenhum dado válido encontrado no CSV.');
-    }
-
-    dados = transformed;
-    cache.clear();
-    selectedSupervisor = null;
-    popularFiltros();
-    runFullUpdate();
-  }
-
-  function handleFileSelect(e) {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    setFiltrosHabilitados(false);
-    ui.supervisorTableContainer.innerHTML = '<p style="text-align:center; padding: 20px;">Processando arquivo...</p>';
-    ui.preceptorTableContainer.innerHTML = '<p style="text-align:center; color:#999; padding: 20px;">Carregando dados...</p>';
-
-    const reader = new FileReader();
-    reader.onload = function (ev) {
-      try {
-        const text = ev.target.result;
-        localStorage.setItem(LOCAL_STORAGE_KEY, text);
-        processCsvText(text);
-      } catch (err) {
-        console.error(err);
-        alert('Erro ao processar o arquivo CSV: ' + err.message);
-        setFiltrosHabilitados(false);
-      }
-    };
-    reader.onerror = function () {
-      alert('Erro ao ler o arquivo CSV.');
+  function processFile(file) {
+      if (!file) return;
       setFiltrosHabilitados(false);
-    };
-    reader.readAsText(file, 'UTF-8');
+      ui.supervisorTableContainer.innerHTML = '<p style="text-align:center; padding: 20px;">Processando arquivo... Isso pode levar um momento.</p>';
+      ui.preceptorTableContainer.innerHTML = '<p style="text-align:center; color:#999; padding: 20px;">Carregando dados...</p>';
+      Papa.parse(file, {
+          skipEmptyLines: true,
+          complete: function(results) {
+              if (results.errors.length > 0) { console.error('Erros PapaParse:', results.errors); alert('Erro ao processar CSV. Verifique o formato do arquivo. Detalhes no console (F12).'); setFiltrosHabilitados(false); return; }
+              try {
+                  const transformed = transformarDados(results.data);
+                  if (!transformed || transformed.length === 0) { throw new Error('Nenhum dado válido foi extraído.'); }
+                  dados = transformed;
+                  cache.clear(); selectedSupervisor = null;
+                  popularFiltros(); runFullUpdate();
+              } catch (err) { console.error('Erro na transformação de dados:', err); alert('Falha ao processar os dados do arquivo: ' + err.message); setFiltrosHabilitados(false); }
+          },
+          error: function(error) { console.error('Erro fatal do PapaParse:', error); alert('Erro fatal ao ler o arquivo CSV. Verifique a integridade do arquivo.'); setFiltrosHabilitados(false); }
+      });
   }
 
-  function tryLoadFromLocalStorage() {
-    try {
-      const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
-      if (!saved) {
-        setFiltrosHabilitados(false);
-        ui.supervisorTableContainer.innerHTML = '<p style="text-align:center; color:#999; padding: 20px;">Carregue um arquivo CSV para iniciar a análise.</p>';
-        return;
-      }
-      processCsvText(saved);
-      setFiltrosHabilitados(true);
-    } catch (err) {
-      console.warn('Não foi possível carregar dados do cache local:', err);
-      setFiltrosHabilitados(false);
-      localStorage.removeItem(LOCAL_STORAGE_KEY);
-    }
-  }
-
-  function handleRealTimeSearch() {
-    renderSupervisorTable();
-    if (selectedSupervisor) {
-      renderPreceptorTable();
-    }
-  }
-
-  // Eventos
-  selectors.csvInput.addEventListener('change', handleFileSelect);
-
-  ['turma', 'disciplina', 'supervisor', 'preceptor', 'regiao', 'performance'].forEach(key => {
-    const sel = selectors[key];
-    if (sel) {
-      sel.addEventListener('change', () => debounce(runFullUpdate, 300));
-    }
-  });
-
-  selectors.searchSupervisor.addEventListener('input', () => debounce(handleRealTimeSearch, 250));
-  selectors.searchPreceptor.addEventListener('input', () => debounce(handleRealTimeSearch, 250));
-
+  selectors.csvInput.addEventListener('change', (e) => processFile(e.target.files[0]));
+  ['turma', 'disciplina', 'supervisor', 'preceptor', 'regiao', 'performance'].forEach(key => { if (selectors[key]) { selectors[key].addEventListener('change', () => debounce(runFullUpdate, 300)); } });
+  selectors.searchSupervisor.addEventListener('input', () => debounce(renderSupervisorTable, 250));
+  selectors.searchPreceptor.addEventListener('input', () => debounce(renderPreceptorTable, 250));
   selectors.btnLimpar.addEventListener('click', () => {
-    ['turma', 'disciplina', 'supervisor', 'preceptor', 'regiao', 'performance'].forEach(key => {
-      const sel = selectors[key];
-      if (sel) sel.value = '';
-    });
-    selectedSupervisor = null;
-    cache.clear();
-    debounce(runFullUpdate, 0);
+    ['turma', 'disciplina', 'supervisor', 'preceptor', 'regiao', 'performance'].forEach(key => { if (selectors[key]) selectors[key].value = ''; });
+    selectors.searchSupervisor.value = ''; selectors.searchPreceptor.value = '';
+    selectedSupervisor = null; cache.clear(); debounce(runFullUpdate, 0);
   });
+  selectors.btnLimparCache.addEventListener('click', () => { cache.clear(); alert('O cache de análise (filtros) foi limpo com sucesso.'); });
+  
+  function getFilteredExportData(dataType) {
+      let dataToExport = dataType === 'supervisor' ? supervisorData.slice() : preceptorData.slice();
+      if (dataType === 'preceptor' && selectedSupervisor) {
+          dataToExport = dataToExport.filter(p => p.supervisor === selectedSupervisor);
+      }
+      const performanceFilter = selectors.performance.value;
+      if (performanceFilter) { dataToExport = dataToExport.filter(d => { if (performanceFilter === 'critical') return d.perc < 80; if (performanceFilter === 'good') return d.perc >= 80 && d.perc < 100; if (performanceFilter === 'excellent') return d.perc >= 99.9; return true; }); }
+      const searchTerm = (dataType === 'supervisor' ? selectors.searchSupervisor : selectors.searchPreceptor).value.toLowerCase().trim();
+      if (searchTerm) { dataToExport = dataToExport.filter(d => d.name.toLowerCase().includes(searchTerm)); }
+      return dataToExport;
+  }
 
-  selectors.btnLimparCache.addEventListener('click', () => {
-    cache.clear();
-    localStorage.removeItem(LOCAL_STORAGE_KEY);
-    alert('Cache de filtros e arquivo CSV limpo com sucesso.');
-    setFiltrosHabilitados(false);
-    ui.supervisorTableContainer.innerHTML = '<p style="text-align:center; color:#999; padding: 20px;">Carregue um arquivo CSV para iniciar a análise.</p>';
-    ui.preceptorTableContainer.innerHTML = '<p style="text-align:center; color:#999; padding: 20px;">Selecione um supervisor para ver seus preceptores.</p>';
-    ui.resumoGeralTableContainer.innerHTML = '';
-    ui.aceAcsTableContainer.innerHTML = '';
-  });
-
-  selectors.btnExportSupervisores.addEventListener('click', () => {
-    const performanceFilter = selectors.performance.value;
-    let dataToExport = supervisorData;
-    if (performanceFilter) {
-      dataToExport = supervisorData.filter(d => {
-        if (performanceFilter === 'critical') return d.perc < 80;
-        if (performanceFilter === 'good') return d.perc >= 80 && d.perc < 100;
-        if (performanceFilter === 'excellent') return d.perc === 100;
-        return true;
-      });
-    }
-    exportToCSV(dataToExport, 'supervisores-performance.csv');
-  });
-
+  selectors.btnExportSupervisores.addEventListener('click', () => exportToCSV(getFilteredExportData('supervisor'), 'supervisores-performance.csv'));
   selectors.btnExportPreceptores.addEventListener('click', () => {
-    let dataToExport = preceptorData;
-    if (selectedSupervisor) {
-      dataToExport = dataToExport.filter(p => p.supervisor === selectedSupervisor);
-    }
-    const performanceFilter = selectors.performance.value;
-    if (performanceFilter) {
-      dataToExport = dataToExport.filter(d => {
-        if (performanceFilter === 'critical') return d.perc < 80;
-        if (performanceFilter === 'good') return d.perc >= 80 && d.perc < 100;
-        if (performanceFilter === 'excellent') return d.perc === 100;
-        return true;
-      });
-    }
-    const filename = selectedSupervisor
-      ? `preceptores-performance-de-${selectedSupervisor.replace(/\s/g, '_')}.csv`
-      : 'preceptores-performance.csv';
-    exportToCSV(dataToExport, filename);
+      const data = getFilteredExportData('preceptor');
+      const filename = selectedSupervisor ? `preceptores-performance-de-${selectedSupervisor.replace(/\s/g, '_')}.csv` : 'preceptores-performance.csv';
+      exportToCSV(data, filename);
   });
 
-  // Estado inicial: tenta carregar do cache local
   setFiltrosHabilitados(false);
-  tryLoadFromLocalStorage();
+  ui.supervisorTableContainer.innerHTML = '<p style="text-align:center; color:#999; padding: 20px;">Carregue um arquivo CSV para iniciar a análise.</p>';
 });
 </script>
 </body>
